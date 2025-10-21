@@ -1,0 +1,10 @@
+# /backend/.gitignore
+
+# Ignorar dependencias
+/node_modules
+
+# Ignorar la carpeta de build de TypeScript
+/dist
+
+# ¡Ignorar el archivo de contraseñas!
+.env

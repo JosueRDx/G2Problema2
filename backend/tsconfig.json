@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs", // Keep this if it's working, OR try "NodeNext" if "commonjs" causes other issues later
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    // --- ADD OR MODIFY THIS LINE ---
+    "moduleResolution": "node" // Or try "NodeNext" if module is "NodeNext"
+  },
+  "include": ["src/**/*"]
+}
