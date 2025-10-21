@@ -2,15 +2,18 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { LogOut, User as UserIcon, FilePlus } from "lucide-react";
 
 export function Navbar() {
   const { user, logout, isLoading } = useAuth();
+  const router = useRouter();
 
   const handleLogout = () => {
     logout();
+    router.push("/");
   };
 
   return (
