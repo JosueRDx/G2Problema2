@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
-import Cookies from "js-cookie";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ export default function LoginPage() {
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
   const [isLoading, setIsLoading] = useState(false);
+  const { login } = useAuth();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -40,8 +41,7 @@ export default function LoginPage() {
       if (!res.ok) {
         throw new Error(data.message || "Error al iniciar sesión.");
       }
-      Cookies.set("token", data.token, { expires: 1 });
-      localStorage.setItem("user", JSON.stringify(data.user));
+      login(data.user, data.token);
       toast.success("¡Bienvenido!", { description: "Has iniciado sesión correctamente." });
       
       // Redirigir según el rol
@@ -51,9 +51,10 @@ export default function LoginPage() {
         // (Aquí irán los dashboards de 'externo' y 'unsa')
         router.push("/"); // Por ahora al inicio
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setIsLoading(false);
-      toast.error("Error en el login", { description: error.message });
+      const message = error instanceof Error ? error.message : "Error al iniciar sesión.";
+      toast.error("Error en el login", { description: message });
     }
   }
 
