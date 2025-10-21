@@ -4,7 +4,8 @@
 import { useState, useEffect } from 'react';
 import Cookies from 'js-cookie';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button'; // <-- Add this line
+import { Button } from '@/components/ui/button'; // Asegúrate que Button está importado
+import Link from 'next/link'; // Importa Link
 
 // Interfaces para tipar los datos
 interface Desafio {
@@ -16,6 +17,15 @@ interface Desafio {
   palabras_clave: string | null;
 }
 
+// NUEVA INTERFAZ PARA CAPACIDADES
+interface Capacidad {
+  capacidad_id: number;
+  descripcion_capacidad: string;
+  investigador_nombre: string; // Nombre del investigador
+  palabras_clave: string | null;
+  // Añade otros campos si los necesitas mostrar
+}
+
 interface KeywordStat {
   palabra: string;
   conteo_desafios: number;
@@ -23,6 +33,7 @@ interface KeywordStat {
 
 export default function AdminDashboardPage() {
   const [desafios, setDesafios] = useState<Desafio[]>([]);
+  const [capacidades, setCapacidades] = useState<Capacidad[]>([]); // <-- NUEVO ESTADO
   const [keywordStats, setKeywordStats] = useState<KeywordStat[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +59,15 @@ export default function AdminDashboardPage() {
         if (!desafiosRes.ok) throw new Error(`Error ${desafiosRes.status}: No se pudieron cargar los desafíos.`);
         const desafiosData: Desafio[] = await desafiosRes.json();
         setDesafios(desafiosData);
+
+        // <-- FETCH CAPACIDADES (NUEVO) -->
+        const capacidadesRes = await fetch("http://localhost:3001/api/capacidades", {
+           headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!capacidadesRes.ok) throw new Error(`Error ${capacidadesRes.status}: No se pudieron cargar las capacidades.`);
+        const capacidadesData: Capacidad[] = await capacidadesRes.json();
+        setCapacidades(capacidadesData);
+        // <-- FIN FETCH CAPACIDADES -->
 
         // Fetch Keyword Stats
         const statsRes = await fetch("http://localhost:3001/api/palabras-clave/stats", {
@@ -87,12 +107,10 @@ export default function AdminDashboardPage() {
           <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white p-6 rounded-lg border">
               <h3 className="text-lg font-semibold">Desafíos Registrados</h3>
-              {/* Aquí podrías mostrar un conteo total si lo tuvieras */}
               <p className="text-4xl font-bold mt-2">{desafios.length}</p>
             </div>
              <div className="bg-white p-6 rounded-lg border">
               <h3 className="text-lg font-semibold">Palabras Clave Populares</h3>
-              {/* Mostramos la palabra más popular y su conteo */}
               <p className="text-xl font-bold mt-2 truncate">
                   {keywordStats.length > 0 ? keywordStats[0].palabra : '-'}
               </p>
@@ -102,7 +120,8 @@ export default function AdminDashboardPage() {
             </div>
              <div className="bg-white p-6 rounded-lg border">
               <h3 className="text-lg font-semibold">Capacidades UNSA</h3>
-              <p className="text-4xl font-bold mt-2">0</p> {/* Actualizar cuando tengas datos de capacidades */}
+              {/* <-- ACTUALIZADO CONTEO --> */}
+              <p className="text-4xl font-bold mt-2">{capacidades.length}</p>
             </div>
           </div>
 
@@ -137,15 +156,56 @@ export default function AdminDashboardPage() {
                    </table>
                 </div>
                )}
-                {/* Podrías añadir un enlace a "/admin/desafios" para ver todos */}
                 {desafios.length > 5 && (
                     <div className="mt-4">
-                        <Button variant="link" size="sm">Ver todos los desafíos...</Button>
+                      {/* Enlace a la página completa de desafíos (si la creas) */}
+                      <Link href="/admin/desafios">
+                          <Button variant="link" size="sm">Ver todos los desafíos...</Button>
+                      </Link>
                     </div>
                 )}
            </div>
 
-           {/* Lista de Palabras Clave Populares */}
+           {/* <-- NUEVA TABLA DE CAPACIDADES --> */}
+           <div className="mt-12 bg-white p-6 rounded-lg border">
+               <h2 className="text-xl font-semibold mb-4">Últimas Capacidades Registradas</h2>
+               {capacidades.length === 0 ? (
+                    <p className="text-neutral-500">No hay capacidades registradas aún.</p>
+               ) : (
+                <div className="overflow-x-auto">
+                   <table className="min-w-full divide-y divide-neutral-200">
+                       <thead className="bg-neutral-50">
+                           <tr>
+                               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">Descripción</th>
+                               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">Investigador</th>
+                               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">Palabras Clave</th>
+                           </tr>
+                       </thead>
+                       <tbody className="bg-white divide-y divide-neutral-200">
+                           {capacidades.slice(0, 5).map((capacidad) => ( // Mostrar solo las últimas 5
+                               <tr key={capacidad.capacidad_id}>
+                                   <td className="px-6 py-4 text-sm text-neutral-900 max-w-md truncate">{capacidad.descripcion_capacidad}</td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-neutral-600">{capacidad.investigador_nombre}</td>
+                                   <td className="px-6 py-4 text-sm text-neutral-500 max-w-xs truncate">{capacidad.palabras_clave || '-'}</td>
+                               </tr>
+                           ))}
+                       </tbody>
+                   </table>
+                </div>
+               )}
+                {capacidades.length > 5 && (
+                    <div className="mt-4">
+                       {/* Enlace a la página completa de capacidades (si la creas) */}
+                       <Link href="/admin/capacidades">
+                           <Button variant="link" size="sm">Ver todas las capacidades...</Button>
+                       </Link>
+                    </div>
+                )}
+           </div>
+           {/* <-- FIN NUEVA TABLA --> */}
+
+
+           {/* Lista de Palabras Clave Populares (sin cambios) */}
            <div className="mt-8 bg-white p-6 rounded-lg border">
                <h2 className="text-xl font-semibold mb-4">Palabras Clave Más Utilizadas en Desafíos</h2>
                 {keywordStats.length === 0 ? (
