@@ -1,5 +1,7 @@
-import dbPool from '../../config/db'; 
-import { RowDataPacket, OkPacket } from 'mysql2/promise'; 
+import dbPool from '../../config/db';
+import { RowDataPacket, OkPacket } from 'mysql2/promise';
+
+const MATCH_SETTINGS_KEY = 'matchs_enabled';
 
 // Define los posibles estados de un match (igual que en la base de datos)
 export type MatchEstado =
@@ -35,8 +37,135 @@ export interface MatchRecord extends RowDataPacket {
   solicitante_nombre?: string;
   receptor_nombre?: string;
   desafio_participante_nombre?: string; 
-  capacidad_investigador_nombre?: string; 
+  capacidad_investigador_nombre?: string;
 }
+
+export interface MatchSettingsRow extends RowDataPacket {
+  clave: string;
+  valor: string;
+}
+
+export interface MatchMessage extends RowDataPacket {
+  mensaje_id: number;
+  match_id: number;
+  remitente_usuario_id: number;
+  contenido: string;
+  fecha_envio: string;
+  leido: number;
+  remitente_email?: string;
+  remitente_nombre?: string | null;
+}
+
+const parseEnabledFlag = (valor: string | undefined): boolean => valor === '1' || valor === 'true';
+
+export const getMatchSystemStatus = async (): Promise<boolean> => {
+  try {
+    const [rows] = await dbPool.execute<MatchSettingsRow[]>(
+      'SELECT valor FROM configuracion_sistema WHERE clave = ? LIMIT 1',
+      [MATCH_SETTINGS_KEY]
+    );
+
+    if (!rows.length) {
+      return false;
+    }
+
+    return parseEnabledFlag(rows[0].valor);
+  } catch (error: any) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') {
+      console.warn('Tabla configuracion_sistema no encontrada. Se asume sistema de matchs deshabilitado.');
+      return false;
+    }
+    console.error('Error al obtener el estado del sistema de matchs:', error);
+    throw new Error('No se pudo obtener el estado del sistema de matchs.');
+  }
+};
+
+export const updateMatchSystemStatus = async (enabled: boolean): Promise<void> => {
+  try {
+    await dbPool.execute(
+      `INSERT INTO configuracion_sistema (clave, valor)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE valor = VALUES(valor)`,
+      [MATCH_SETTINGS_KEY, enabled ? '1' : '0']
+    );
+  } catch (error: any) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') {
+      console.error('Debe existir la tabla configuracion_sistema con la columna clave como PRIMARY KEY.');
+    } else {
+      console.error('Error al actualizar el estado del sistema de matchs:', error);
+    }
+    throw new Error('No se pudo actualizar el estado del sistema de matchs.');
+  }
+};
+
+export const assertMatchSystemEnabled = async (options?: { bypassForAdmin?: boolean; userRole?: string }): Promise<void> => {
+  if (options?.bypassForAdmin && options.userRole === 'admin') {
+    return;
+  }
+
+  const enabled = await getMatchSystemStatus();
+  if (!enabled) {
+    throw new Error('El sistema de matchs está desactivado.');
+  }
+};
+
+export const getDesafioOwnerUserId = async (desafio_id: number): Promise<number | null> => {
+  try {
+    const [rows] = await dbPool.execute<RowDataPacket[]>(
+      `SELECT p.usuario_id
+       FROM desafios d
+       JOIN participantes_externos p ON d.participante_id = p.participante_id
+       WHERE d.desafio_id = ?`,
+      [desafio_id]
+    );
+    return rows.length ? (rows[0].usuario_id as number) : null;
+  } catch (error) {
+    console.error(`Error al obtener el dueño del desafío ${desafio_id}:`, error);
+    throw new Error('No se pudo validar el propietario del desafío.');
+  }
+};
+
+export const getCapacidadOwnerUserId = async (capacidad_id: number): Promise<number | null> => {
+  try {
+    const [rows] = await dbPool.execute<RowDataPacket[]>(
+      `SELECT i.usuario_id
+       FROM capacidades_unsa c
+       JOIN investigadores_unsa i ON c.investigador_id = i.investigador_id
+       WHERE c.capacidad_id = ?`,
+      [capacidad_id]
+    );
+    return rows.length ? (rows[0].usuario_id as number) : null;
+  } catch (error) {
+    console.error(`Error al obtener el dueño de la capacidad ${capacidad_id}:`, error);
+    throw new Error('No se pudo validar el propietario de la capacidad.');
+  }
+};
+
+export const getMatchOrThrow = async (match_id: number): Promise<MatchRecord> => {
+  const match = await getMatchById(match_id);
+  if (!match) {
+    throw new Error('Match no encontrado.');
+  }
+  return match;
+};
+
+export const ensureUserCanAccessMatch = async (
+  match_id: number,
+  usuario_id: number,
+  options?: { requireAccepted?: boolean }
+): Promise<MatchRecord> => {
+  const match = await getMatchOrThrow(match_id);
+
+  if (match.solicitante_usuario_id !== usuario_id && match.receptor_usuario_id !== usuario_id) {
+    throw new Error('No tienes acceso a este match.');
+  }
+
+  if (options?.requireAccepted && match.estado !== 'aceptado') {
+    throw new Error('El chat solo está disponible para matchs aceptados.');
+  }
+
+  return match;
+};
 
 /**
  * Función para crear un nuevo registro de match en la base de datos.
@@ -176,5 +305,60 @@ export const getAllMatchesAdmin = async (): Promise<MatchRecord[]> => {
   } catch (error) {
     console.error('Error al obtener todos los matchs para admin:', error);
     throw new Error('Error al obtener todos los matchs.');
+  }
+};
+
+export const getMessagesByMatchId = async (match_id: number): Promise<MatchMessage[]> => {
+  try {
+    const [rows] = await dbPool.execute<MatchMessage[]>(
+      `SELECT msj.*, u.email AS remitente_email, u.nombres_apellidos AS remitente_nombre
+       FROM mensajes msj
+       JOIN usuarios u ON msj.remitente_usuario_id = u.usuario_id
+       WHERE msj.match_id = ?
+       ORDER BY msj.fecha_envio ASC`,
+      [match_id]
+    );
+    return rows;
+  } catch (error) {
+    console.error(`Error al obtener mensajes del match ${match_id}:`, error);
+    throw new Error('Error al obtener los mensajes del match.');
+  }
+};
+
+export const createMatchMessage = async (
+  match_id: number,
+  remitente_usuario_id: number,
+  contenido: string
+): Promise<number> => {
+  try {
+    const [result] = await dbPool.execute<OkPacket>(
+      `INSERT INTO mensajes (match_id, remitente_usuario_id, contenido, fecha_envio, leido)
+       VALUES (?, ?, ?, NOW(), 0)`,
+      [match_id, remitente_usuario_id, contenido]
+    );
+
+    if (!result.insertId) {
+      throw new Error('No se pudo registrar el mensaje.');
+    }
+
+    return result.insertId;
+  } catch (error) {
+    console.error(`Error al registrar mensaje para match ${match_id}:`, error);
+    throw new Error('Error al enviar el mensaje.');
+  }
+};
+
+export const markMessagesAsRead = async (match_id: number, usuario_id: number): Promise<number> => {
+  try {
+    const [result] = await dbPool.execute<OkPacket>(
+      `UPDATE mensajes
+       SET leido = 1
+       WHERE match_id = ? AND remitente_usuario_id <> ? AND leido = 0`,
+      [match_id, usuario_id]
+    );
+    return result.affectedRows;
+  } catch (error) {
+    console.error(`Error al marcar mensajes como leídos para match ${match_id}:`, error);
+    throw new Error('Error al actualizar los mensajes como leídos.');
   }
 };

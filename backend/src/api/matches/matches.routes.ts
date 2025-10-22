@@ -7,6 +7,15 @@ const router = Router();
 
 // --- Definición de Rutas para Matchs ---
 
+router.get('/settings', matchesController.getMatchSystemStatusController);
+
+router.patch(
+  '/settings',
+  authenticateToken,
+  authorizeRole(['admin']),
+  matchesController.updateMatchSystemStatusController
+);
+
 /**
  * POST /api/matches
  */
@@ -31,17 +40,36 @@ router.get(
 router.patch( 
   '/:matchId/status', 
   authenticateToken, 
-  matchesController.updateMatchStatusController 
+ matchesController.updateMatchStatusController
 );
 
 /**
  * GET /api/matches/admin/all
  */
 router.get(
-  '/admin/all', 
+  '/admin/all',
   authenticateToken,
   authorizeRole(['admin']),
   matchesController.getAllMatchesAdminController
 );
+
+router.get(
+  '/:matchId/messages',
+  authenticateToken,
+  matchesController.getMatchMessagesController
+);
+
+router.post(
+  '/:matchId/messages',
+  authenticateToken,
+  matchesController.createMatchMessageController
+);
+
+router.patch(
+  '/:matchId/messages/read',
+  authenticateToken,
+  matchesController.markMessagesAsReadController
+);
+
 
 export default router;

@@ -1,10 +1,12 @@
-"use client"; 
+"use client";
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext"; 
-import { ArrowLeftRight, MessageSquare, ListChecks } from "lucide-react"; 
+import { useAuth } from "@/context/AuthContext";
+import { MatchSettingsProvider, useMatchSettings } from "@/context/MatchSettingsContext";
+import { ArrowLeftRight, MessageSquare, ListChecks, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 // Define los enlaces para las subsecciones de Matchs
 const subNavLinks = [
@@ -13,10 +15,11 @@ const subNavLinks = [
   { href: "/matchs/mis-registros", label: "Mis Registros", icon: ListChecks },
 ];
 
-export default function MatchsLayout({ children }: { children: ReactNode }) {
-  const pathname = usePathname(); 
+function MatchsLayoutContent({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const router = useRouter();
-  const { user, isLoading } = useAuth(); 
+  const { user, isLoading } = useAuth();
+  const { enabled, loading: settingsLoading, refresh } = useMatchSettings();
 
   // Efecto para proteger la sección completa de /matchs
   useEffect(() => {
@@ -67,10 +70,32 @@ export default function MatchsLayout({ children }: { children: ReactNode }) {
 
         {/* Columna de Contenido Principal */}
         <main className="md:col-span-3">
+          {settingsLoading ? (
+            <div className="flex justify-between items-center mb-4 rounded-md border p-4 bg-neutral-50">
+              <p className="text-sm text-neutral-600">Cargando estado del sistema de matchs...</p>
+              <RefreshCw className="w-4 h-4 animate-spin text-neutral-500" />
+            </div>
+          ) : !enabled ? (
+            <div className="mb-6 rounded-md border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-900">
+              <p className="font-semibold">Sistema de matchs desactivado.</p>
+              <p className="mt-1">Un administrador debe activar la opción “Iniciar Matchs” para habilitar las funcionalidades de emparejamiento y chat.</p>
+              <Button onClick={refresh} variant="outline" size="sm" className="mt-3">
+                <RefreshCw className="w-4 h-4 mr-2" /> Volver a comprobar
+              </Button>
+            </div>
+          ) : null}
           {/* Aquí se renderizará el contenido de cada página (page.tsx) */}
           {children}
         </main>
       </div>
     </div>
+  );
+}
+
+export default function MatchsLayout({ children }: { children: ReactNode }) {
+  return (
+    <MatchSettingsProvider>
+      <MatchsLayoutContent>{children}</MatchsLayoutContent>
+    </MatchSettingsProvider>
   );
 }

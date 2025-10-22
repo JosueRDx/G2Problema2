@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext'; // Para saber el rol y ID del usuario
+import { useMatchSettings } from '@/context/MatchSettingsContext';
 import Cookies from 'js-cookie';
 import { toast } from 'sonner';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -30,6 +31,7 @@ interface MiCapacidad {
 
 export default function RealizarMatchPage() {
     const { user } = useAuth(); // Obtiene el usuario logueado desde el contexto
+    const { enabled, loading: settingsLoading } = useMatchSettings();
     const [misItems, setMisItems] = useState<(MiDesafio | MiCapacidad)[]>([]); // Estado para guardar desafíos o capacidades
     const [isLoading, setIsLoading] = useState(true); // Carga inicial de mis items
     const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export default function RealizarMatchPage() {
     // Efecto para cargar los desafíos o capacidades del usuario al iniciar
     useEffect(() => {
         const fetchMisItems = async () => {
-            if (!user) return; // Si no hay usuario, no hacer nada (el layout ya protege)
+            if (!user || !enabled) return; // Si no hay usuario o sistema deshabilitado, no hacer nada
 
             setIsLoading(true);
             setError(null);
@@ -76,10 +78,14 @@ export default function RealizarMatchPage() {
         };
 
         fetchMisItems();
-    }, [user]); // Se ejecuta cada vez que 'user' cambie (ej. al loguearse)
+    }, [user, enabled]); // Se ejecuta cada vez que 'user' o el estado del sistema cambie
 
     // Función actualizada para manejar la selección Y buscar coincidencias
     const handleSelectItem = async (id: number) => {
+        if (!enabled) {
+            toast.warning("El sistema de matchs está desactivado actualmente.");
+            return;
+        }
         setSelectedItemId(id); // Guarda el ID del item que el usuario seleccionó
         setPotentialMatches([]); // Limpia los resultados anteriores
         setRequestedMatchId(null); // Limpia el ID de solicitud enviada
@@ -87,7 +93,7 @@ export default function RealizarMatchPage() {
         setError(null); // Limpia errores anteriores
         const token = Cookies.get('token');
 
-        if (!token || !user) {
+        if (!token || !user || !enabled) {
             toast.error("Error de autenticación");
             setIsLoadingMatches(false);
             return;
@@ -135,6 +141,11 @@ export default function RealizarMatchPage() {
     const handleRequestMatch = async (targetId: number) => {
         if (!user || !selectedItemId) return; // Necesitamos el usuario y el item seleccionado
 
+        if (!enabled) {
+            toast.warning("El sistema de matchs está desactivado actualmente.");
+            return;
+        }
+
         const token = Cookies.get('token');
         if (!token) {
             toast.error("Error de autenticación");
@@ -176,6 +187,18 @@ export default function RealizarMatchPage() {
 
     // Renderizado
     // Muestra carga inicial
+    if (settingsLoading) {
+        return <p>Verificando estado del sistema de matchs...</p>;
+    }
+
+    if (!enabled) {
+        return (
+            <div className="rounded-md border border-yellow-300 bg-yellow-50 p-6 text-yellow-900">
+                <h2 className="text-lg font-semibold">Sistema de matchs desactivado</h2>
+                <p className="text-sm mt-2">Cuando un administrador active la opción “Iniciar Matchs” podrás buscar coincidencias y enviar solicitudes.</p>
+            </div>
+        );
+    }
     if (isLoading) return <p>Cargando tus {user?.rol === 'externo' ? 'desafíos' : 'capacidades'}...</p>;
     // Muestra error de carga inicial (si lo hubo)
     // Nota: El error de búsqueda de matches se muestra más abajo

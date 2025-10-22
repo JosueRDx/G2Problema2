@@ -1,43 +1,12 @@
-// /backend/src/api/matches/matches.controller.ts
 import { Request, Response } from 'express';
 import * as matchesService from './matches.service';
-import { MatchEstado } from './matches.service';
-import dbPool from '../../config/db'; 
-import { RowDataPacket } from 'mysql2/promise'; 
-
-async function getDesafioOwnerId(desafio_id: number): Promise<number | null> {
-    console.warn(`Función getDesafioOwnerId(${desafio_id}) usando implementación directa de BD`);
-    try {
-        const [rows] = await dbPool.execute<RowDataPacket[]>(
-            `SELECT p.usuario_id
-             FROM desafios d
-             JOIN participantes_externos p ON d.participante_id = p.participante_id
-             WHERE d.desafio_id = ?`,
-            [desafio_id]
-        );
-        return rows.length > 0 ? rows[0].usuario_id : null;
-    } catch (error) {
-        console.error(`Error en getDesafioOwnerId(${desafio_id}):`, error);
-        return null; // Devuelve null en caso de error de BD
-    }
-}
-
-async function getCapacidadOwnerId(capacidad_id: number): Promise<number | null> {
-    console.warn(`Función getCapacidadOwnerId(${capacidad_id}) usando implementación directa de BD`);
-     try {
-        const [rows] = await dbPool.execute<RowDataPacket[]>(
-            `SELECT i.usuario_id
-             FROM capacidades_unsa c
-             JOIN investigadores_unsa i ON c.investigador_id = i.investigador_id
-             WHERE c.capacidad_id = ?`,
-            [capacidad_id]
-        );
-        return rows.length > 0 ? rows[0].usuario_id : null;
-     } catch (error) {
-        console.error(`Error en getCapacidadOwnerId(${capacidad_id}):`, error);
-        return null; // Devuelve null en caso de error de BD
-    }
-}
+import {
+  MatchEstado,
+  assertMatchSystemEnabled,
+  getCapacidadOwnerUserId,
+  getDesafioOwnerUserId,
+  ensureUserCanAccessMatch,
+} from './matches.service';
 
 /**
  * Controlador para CREAR una nueva solicitud de match.
@@ -54,22 +23,23 @@ export const createMatchController = async (req: Request, res: Response) => {
   }
 
   try {
+    await assertMatchSystemEnabled({ userRole: req.user.rol });
     let receptor_usuario_id: number | null = null;
     let estado_inicial: 'pendiente_unsa' | 'pendiente_externo';
 
     if (req.user.rol === 'externo') {
-      receptor_usuario_id = await getCapacidadOwnerId(capacidad_id);
+      receptor_usuario_id = await getCapacidadOwnerUserId(capacidad_id);
       if (!receptor_usuario_id) throw new Error('No se encontró el investigador dueño de la capacidad.');
-      const desafioOwner = await getDesafioOwnerId(desafio_id);
+      const desafioOwner = await getDesafioOwnerUserId(desafio_id);
       if (desafioOwner !== solicitante_usuario_id) {
            return res.status(403).json({ message: 'No puedes iniciar un match con un desafío que no te pertenece.' });
       }
       estado_inicial = 'pendiente_unsa';
 
     } else if (req.user.rol === 'unsa') {
-      receptor_usuario_id = await getDesafioOwnerId(desafio_id);
+      receptor_usuario_id = await getDesafioOwnerUserId(desafio_id);
       if (!receptor_usuario_id) throw new Error('No se encontró el participante dueño del desafío.');
-       const capacidadOwner = await getCapacidadOwnerId(capacidad_id);
+       const capacidadOwner = await getCapacidadOwnerUserId(capacidad_id);
        if (capacidadOwner !== solicitante_usuario_id) {
             return res.status(403).json({ message: 'No puedes iniciar un match con una capacidad que no te pertenece.' });
        }
@@ -98,8 +68,15 @@ export const createMatchController = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error("Error en createMatchController:", error);
-    res.status(error.message.includes('Ya existe') || error.message.includes('no existe') || error.message.includes('No se encontró') ? 400 : 500)
-       .json({ message: error.message || 'Error interno al procesar la solicitud.' });
+    const statusCode =
+      error.message === 'El sistema de matchs está desactivado.'
+        ? 403
+        : error.message.includes('Ya existe') || error.message.includes('no existe') || error.message.includes('No se encontró')
+        ? 400
+        : 500;
+    res
+      .status(statusCode)
+      .json({ message: error.message || 'Error interno al procesar la solicitud.' });
   }
 };
 
@@ -137,6 +114,7 @@ export const updateMatchStatusController = async (req: Request, res: Response) =
   }
 
   try {
+    await assertMatchSystemEnabled({ userRole: req.user.rol });
     const currentMatch = await matchesService.getMatchById(match_id);
     if (!currentMatch) {
       return res.status(404).json({ message: 'Match no encontrado.' });
@@ -197,7 +175,15 @@ export const updateMatchStatusController = async (req: Request, res: Response) =
 
   } catch (error: any) {
     console.error("Error en updateMatchStatusController:", error);
-    res.status(500).json({ message: error.message || 'Error interno al actualizar el estado del match.' });
+    const statusCode =
+      error.message === 'El sistema de matchs está desactivado.'
+        ? 403
+        : error.message === 'Match no encontrado.'
+        ? 404
+        : error.message.includes('No puedes')
+        ? 403
+        : 500;
+    res.status(statusCode).json({ message: error.message || 'Error interno al actualizar el estado del match.' });
   }
 };
 
@@ -215,4 +201,127 @@ export const getAllMatchesAdminController = async (req: Request, res: Response) 
         console.error("Error en getAllMatchesAdminController:", error);
         res.status(500).json({ message: error.message || 'Error al obtener todos los matchs.' });
     }
+};
+
+export const getMatchSystemStatusController = async (_req: Request, res: Response) => {
+  try {
+    const enabled = await matchesService.getMatchSystemStatus();
+    res.status(200).json({ enabled });
+  } catch (error: any) {
+    console.error('Error en getMatchSystemStatusController:', error);
+    res.status(500).json({ message: error.message || 'No se pudo obtener el estado del sistema de matchs.' });
+  }
+};
+
+export const updateMatchSystemStatusController = async (req: Request, res: Response) => {
+  if (!req.user || req.user.rol !== 'admin') {
+    return res.status(403).json({ message: 'Acceso denegado.' });
+  }
+
+  const { enabled } = req.body;
+
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ message: 'El valor "enabled" debe ser booleano.' });
+  }
+
+  try {
+    await matchesService.updateMatchSystemStatus(enabled);
+    res.status(200).json({ message: 'Estado del sistema de matchs actualizado correctamente.', enabled });
+  } catch (error: any) {
+    console.error('Error en updateMatchSystemStatusController:', error);
+    res.status(500).json({ message: error.message || 'No se pudo actualizar el estado del sistema de matchs.' });
+  }
+};
+
+export const getMatchMessagesController = async (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: 'Autenticación requerida.' });
+  }
+
+  const match_id = parseInt(req.params.matchId, 10);
+  if (isNaN(match_id)) {
+    return res.status(400).json({ message: 'ID de match inválido.' });
+  }
+
+  try {
+    await assertMatchSystemEnabled({ userRole: req.user.rol });
+    await ensureUserCanAccessMatch(match_id, req.user.userId, { requireAccepted: true });
+    const messages = await matchesService.getMessagesByMatchId(match_id);
+    res.status(200).json(messages);
+  } catch (error: any) {
+    console.error('Error en getMatchMessagesController:', error);
+    const statusCode =
+      error.message === 'El sistema de matchs está desactivado.'
+        ? 403
+        : error.message === 'Match no encontrado.'
+        ? 404
+        : error.message.includes('No tienes acceso') || error.message.includes('disponible')
+        ? 403
+        : 500;
+    res.status(statusCode).json({ message: error.message || 'Error al obtener los mensajes.' });
+  }
+};
+
+export const createMatchMessageController = async (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: 'Autenticación requerida.' });
+  }
+
+  const match_id = parseInt(req.params.matchId, 10);
+  const { contenido } = req.body;
+
+  if (isNaN(match_id)) {
+    return res.status(400).json({ message: 'ID de match inválido.' });
+  }
+  if (!contenido || typeof contenido !== 'string') {
+    return res.status(400).json({ message: 'El contenido del mensaje es obligatorio.' });
+  }
+
+  try {
+    await assertMatchSystemEnabled({ userRole: req.user.rol });
+    await ensureUserCanAccessMatch(match_id, req.user.userId, { requireAccepted: true });
+    const messageId = await matchesService.createMatchMessage(match_id, req.user.userId, contenido.trim());
+    res.status(201).json({ message: 'Mensaje enviado correctamente.', messageId });
+  } catch (error: any) {
+    console.error('Error en createMatchMessageController:', error);
+    const statusCode =
+      error.message === 'El sistema de matchs está desactivado.'
+        ? 403
+        : error.message === 'Match no encontrado.'
+        ? 404
+        : error.message.includes('No tienes acceso') || error.message.includes('disponible')
+        ? 403
+        : 500;
+    res.status(statusCode).json({ message: error.message || 'Error al enviar el mensaje.' });
+  }
+};
+
+export const markMessagesAsReadController = async (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: 'Autenticación requerida.' });
+  }
+
+  const match_id = parseInt(req.params.matchId, 10);
+
+  if (isNaN(match_id)) {
+    return res.status(400).json({ message: 'ID de match inválido.' });
+  }
+
+  try {
+    await assertMatchSystemEnabled({ userRole: req.user.rol });
+    await ensureUserCanAccessMatch(match_id, req.user.userId, { requireAccepted: true });
+    const affected = await matchesService.markMessagesAsRead(match_id, req.user.userId);
+    res.status(200).json({ message: 'Mensajes marcados como leídos.', updated: affected });
+  } catch (error: any) {
+    console.error('Error en markMessagesAsReadController:', error);
+    const statusCode =
+      error.message === 'El sistema de matchs está desactivado.'
+        ? 403
+        : error.message === 'Match no encontrado.'
+        ? 404
+        : error.message.includes('No tienes acceso') || error.message.includes('disponible')
+        ? 403
+        : 500;
+    res.status(statusCode).json({ message: error.message || 'Error al actualizar los mensajes.' });
+  }
 };

@@ -6,12 +6,13 @@ import Cookies from 'js-cookie';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DesafioAdmin } from '@/types/desafio';
 import { CapacidadAdmin } from '@/types/capacidad';
 import { CapacidadMatch, DesafioMatch } from '@/types/matching';
-import { ArrowDownUp, Info } from 'lucide-react';
+import { MatchRecord } from '@/types/match';
+import { ArrowDownUp, Info, Power, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 
 type SearchType = 'desafio' | 'capacidad';
@@ -35,8 +36,61 @@ export default function MatchingAdminPage() {
   const [matches, setMatches] = useState<(CapacidadMatch | DesafioMatch)[]>([]);
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [mostFrequentKeyword, setMostFrequentKeyword] = useState<string | null>(null);
+  const [matchSystemEnabled, setMatchSystemEnabled] = useState(false);
+  const [isLoadingMatchSettings, setIsLoadingMatchSettings] = useState(false);
+  const [isUpdatingMatchSettings, setIsUpdatingMatchSettings] = useState(false);
+  const [adminMatches, setAdminMatches] = useState<MatchRecord[]>([]);
+  const [isLoadingAdminMatches, setIsLoadingAdminMatches] = useState(false);
+
 
   const token = Cookies.get('token');
+
+    const fetchMatchSystemStatus = useCallback(async () => {
+    if (!token) {
+      toast.error("Error de autenticación");
+      return;
+    }
+    setIsLoadingMatchSettings(true);
+    try {
+      const response = await fetch("http://localhost:3001/api/matches/settings", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "No se pudo obtener el estado del sistema de matchs.");
+      }
+      setMatchSystemEnabled(Boolean(data.enabled));
+    } catch (error: any) {
+      console.error("Error al obtener estado del sistema de matchs:", error);
+      setMatchSystemEnabled(false);
+      toast.error("Error", { description: error.message });
+    } finally {
+      setIsLoadingMatchSettings(false);
+    }
+  }, [token]);
+
+  const fetchAdminMatches = useCallback(async () => {
+    if (!token) {
+      toast.error("Error de autenticación");
+      return;
+    }
+    setIsLoadingAdminMatches(true);
+    try {
+      const response = await fetch("http://localhost:3001/api/matches/admin/all", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "No se pudieron obtener los matchs realizados.");
+      }
+      setAdminMatches(data);
+    } catch (error: any) {
+      console.error("Error al obtener matchs del administrador:", error);
+      toast.error("Error", { description: error.message });
+    } finally {
+      setIsLoadingAdminMatches(false);
+    }
+  }, [token]);
 
   // --- useEffects y calculateMostFrequentKeyword (sin cambios) ---
   useEffect(() => {
@@ -60,6 +114,11 @@ export default function MatchingAdminPage() {
     };
     fetchItems();
   }, [searchType, token]);
+
+  useEffect(() => {
+    fetchMatchSystemStatus();
+    fetchAdminMatches();
+  }, [fetchMatchSystemStatus, fetchAdminMatches]);
 
   const calculateMostFrequentKeyword = (currentMatches: (CapacidadMatch | DesafioMatch)[]) => {
       if (!currentMatches || currentMatches.length === 0) { setMostFrequentKeyword(null); return; }
@@ -118,10 +177,82 @@ export default function MatchingAdminPage() {
     );
   }, [selectedItemId, allItems, searchType]);
 
+  const handleToggleMatchSystem = async () => {
+    if (!token) {
+      toast.error("Error de autenticación");
+      return;
+    }
+    setIsUpdatingMatchSettings(true);
+    try {
+      const response = await fetch("http://localhost:3001/api/matches/settings", {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ enabled: !matchSystemEnabled }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || 'No se pudo actualizar el estado del sistema de matchs.');
+      }
+      setMatchSystemEnabled(Boolean(data.enabled));
+      toast.success(data.message || (data.enabled ? 'Sistema de matchs activado.' : 'Sistema de matchs desactivado.'));
+      fetchAdminMatches();
+    } catch (error: any) {
+      console.error('Error al actualizar el sistema de matchs:', error);
+      toast.error('Error', { description: error.message });
+    } finally {
+      setIsUpdatingMatchSettings(false);
+    }
+  };
+
   // --- Renderizado ---
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-neutral-900">Emparejamiento (Matching)</h1>
+      <Card className="border border-neutral-200 bg-white">
+        <CardHeader>
+          <CardTitle>Control general del sistema</CardTitle>
+          <CardDescription>
+            Habilita o deshabilita el flujo de solicitudes, aceptación de matchs y chats entre participantes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 text-sm text-neutral-700">
+          {isLoadingMatchSettings ? (
+            <p>Verificando estado actual...</p>
+          ) : (
+            <p>
+              Estado: <span className={`font-semibold ${matchSystemEnabled ? 'text-green-600' : 'text-red-600'}`}>
+                {matchSystemEnabled ? 'Activo' : 'Inactivo'}
+              </span>
+            </p>
+          )}
+          <p className="text-xs text-neutral-500">
+            Cuando el sistema está inactivo, los usuarios no pueden enviar solicitudes ni chatear sobre matchs existentes.
+          </p>
+        </CardContent>
+        <CardFooter className="flex flex-wrap gap-3">
+          <Button
+            onClick={handleToggleMatchSystem}
+            disabled={isLoadingMatchSettings || isUpdatingMatchSettings}
+            variant={matchSystemEnabled ? 'destructive' : 'default'}
+          >
+            <Power className="w-4 h-4 mr-2" /> {matchSystemEnabled ? 'Detener Matchs' : 'Iniciar Matchs'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              fetchMatchSystemStatus();
+              fetchAdminMatches();
+            }}
+            disabled={isLoadingMatchSettings || isLoadingAdminMatches}
+          >
+            <RefreshCw className="w-4 h-4 mr-2" /> Actualizar información
+          </Button>
+        </CardFooter>
+      </Card>
       <div className="flex flex-col md:flex-row gap-4">
         {/* Selección de Tipo */}
         <div className="flex-1">
@@ -210,6 +341,49 @@ export default function MatchingAdminPage() {
         </div>
       )}
        <div className="pt-4"><Link href="/admin/dashboard" className="text-sm text-blue-600 hover:underline">← Volver al Dashboard</Link></div>
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold text-neutral-800">Matchs realizados ({adminMatches.length})</h2>
+        {isLoadingAdminMatches ? (
+          <p className="text-sm text-neutral-500">Cargando historial de matchs...</p>
+        ) : adminMatches.length === 0 ? (
+          <p className="text-sm text-neutral-500">Aún no existen matchs registrados.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border border-neutral-200">
+            <table className="min-w-full divide-y divide-neutral-200 text-sm">
+              <thead className="bg-neutral-50 text-neutral-600">
+                <tr>
+                  <th className="px-4 py-2 text-left">ID</th>
+                  <th className="px-4 py-2 text-left">Desafío</th>
+                  <th className="px-4 py-2 text-left">Capacidad</th>
+                  <th className="px-4 py-2 text-left">Estado</th>
+                  <th className="px-4 py-2 text-left">Actualizado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100">
+                {adminMatches.map((match) => (
+                  <tr key={match.match_id} className="bg-white">
+                    <td className="px-4 py-2 font-medium text-neutral-800">#{match.match_id}</td>
+                    <td className="px-4 py-2">
+                      <p className="font-semibold text-neutral-800">{match.desafio_titulo || `ID ${match.desafio_id}`}</p>
+                      <p className="text-xs text-neutral-500">{match.desafio_participante_nombre || 'Participante externo'}</p>
+                    </td>
+                    <td className="px-4 py-2">
+                      <p className="font-semibold text-neutral-800">{match.capacidad_desc_corta || `ID ${match.capacidad_id}`}</p>
+                      <p className="text-xs text-neutral-500">{match.capacidad_investigador_nombre || 'Investigador UNSA'}</p>
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant={match.estado === 'aceptado' ? 'default' : match.estado.startsWith('rechazado') ? 'destructive' : 'secondary'}>
+                        {match.estado.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-neutral-500">{new Date(match.fecha_actualizacion).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
