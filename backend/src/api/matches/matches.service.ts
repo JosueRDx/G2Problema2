@@ -311,9 +311,14 @@ export const getAllMatchesAdmin = async (): Promise<MatchRecord[]> => {
 export const getMessagesByMatchId = async (match_id: number): Promise<MatchMessage[]> => {
   try {
     const [rows] = await dbPool.execute<MatchMessage[]>(
-      `SELECT msj.*, u.email AS remitente_email, u.nombres_apellidos AS remitente_nombre
+      `SELECT
+         msj.*,
+         u.email AS remitente_email,
+         COALESCE(pe.nombres_apellidos, iu.nombres_apellidos, u.email) AS remitente_nombre
        FROM mensajes msj
        JOIN usuarios u ON msj.remitente_usuario_id = u.usuario_id
+       LEFT JOIN participantes_externos pe ON pe.usuario_id = u.usuario_id
+       LEFT JOIN investigadores_unsa iu ON iu.usuario_id = u.usuario_id
        WHERE msj.match_id = ?
        ORDER BY msj.fecha_envio ASC`,
       [match_id]
