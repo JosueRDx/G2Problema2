@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Cookies from "js-cookie";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { MessageSquare, Send, Users } from "lucide-react";
 
 const formatDateTime = (value: string) => new Date(value).toLocaleString();
+const MESSAGE_POLLING_INTERVAL = 2000;
 
 export default function MatchChatsPage() {
   const { user } = useAuth();
@@ -28,7 +29,9 @@ export default function MatchChatsPage() {
   const [newMessage, setNewMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMatches = async () => {
+  const searchParamsKey = searchParams.toString();
+
+  const fetchMatches = useCallback(async () => {
     if (!user || !enabled) return;
     const token = Cookies.get("token");
     if (!token) {
@@ -49,7 +52,7 @@ export default function MatchChatsPage() {
       const accepted = data.filter((match) => match.estado === "aceptado");
       setMatches(accepted);
 
-      const queryMatchId = searchParams.get("matchId");
+      const queryMatchId = new URLSearchParams(searchParamsKey).get("matchId");
       if (queryMatchId) {
         const parsedId = parseInt(queryMatchId, 10);
         if (!isNaN(parsedId) && accepted.some((match) => match.match_id === parsedId)) {
@@ -62,48 +65,75 @@ export default function MatchChatsPage() {
       } else {
         setSelectedMatchId(null);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error al obtener matchs aceptados:", err);
-      setError(err.message);
-      toast.error("Error al cargar matchs", { description: err.message });
+      const message = err instanceof Error ? err.message : "Error al obtener matchs aceptados.";
+      setError(message);
+      toast.error("Error al cargar matchs", { description: message });
     } finally {
       setIsLoadingMatches(false);
     }
-  };
+  }, [enabled, searchParamsKey, user]);
 
-  const fetchMessages = async (matchId: number) => {
-    if (!user || !enabled) return;
-    const token = Cookies.get("token");
-    if (!token) {
-      toast.error("No se pudo obtener las credenciales.");
-      return;
-    }
-    setIsLoadingMessages(true);
-    setError(null);
-    try {
-      const response = await fetch(`http://localhost:3001/api/matches/${matchId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || "No se pudieron obtener los mensajes.");
+  const isFetchingMessagesRef = useRef(false);
+
+  const fetchMessages = useCallback(
+    async (matchId: number, options: { silent?: boolean } = {}) => {
+      if (!user || !enabled) return;
+      const token = Cookies.get("token");
+      if (!token) {
+        toast.error("No se pudo obtener las credenciales.");
+        return;
       }
-      setMessages(data);
+      if (isFetchingMessagesRef.current) {
+        if (options.silent) {
+          return;
+        }
+      }
+      isFetchingMessagesRef.current = true;
+      if (!options.silent) {
+        setIsLoadingMessages(true);
+      }
+      setError(null);
+      try {
+        const response = await fetch(`http://localhost:3001/api/matches/${matchId}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "No se pudieron obtener los mensajes.");
+        }
+        setMessages((previousMessages) => {
+          const previousLastId = previousMessages[previousMessages.length - 1]?.mensaje_id;
+          const newLastId = data[data.length - 1]?.mensaje_id;
+          if (previousMessages.length === data.length && previousLastId === newLastId) {
+            return previousMessages;
+          }
+          return data;
+        });
 
-      await fetch(`http://localhost:3001/api/matches/${matchId}/messages/read`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {
-        /* evitar bloquear si falla el marcado */
-      });
-    } catch (err: any) {
-      console.error("Error al obtener mensajes:", err);
-      setError(err.message);
-      toast.error("Error al cargar mensajes", { description: err.message });
-    } finally {
-      setIsLoadingMessages(false);
-    }
-  };
+        if (!options.silent) {
+          await fetch(`http://localhost:3001/api/matches/${matchId}/messages/read`, {
+            method: "PATCH",
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => {
+            /* evitar bloquear si falla el marcado */
+          });
+        }
+      } catch (err) {
+        console.error("Error al obtener mensajes:", err);
+        const message = err instanceof Error ? err.message : "Error al obtener mensajes.";
+        setError(message);
+        toast.error("Error al cargar mensajes", { description: message });
+      } finally {
+        if (!options.silent) {
+          setIsLoadingMessages(false);
+        }
+        isFetchingMessagesRef.current = false;
+      }
+    },
+    [enabled, user]
+  );
 
   useEffect(() => {
     if (!user || !enabled) {
@@ -112,7 +142,7 @@ export default function MatchChatsPage() {
       return;
     }
     fetchMatches();
-  }, [user, enabled, searchParams]);
+  }, [enabled, fetchMatches, user]);
 
   useEffect(() => {
     if (!enabled || !selectedMatchId) {
@@ -120,7 +150,14 @@ export default function MatchChatsPage() {
       return;
     }
     fetchMessages(selectedMatchId);
-  }, [enabled, selectedMatchId]);
+    const intervalId = setInterval(() => {
+      fetchMessages(selectedMatchId, { silent: true });
+    }, MESSAGE_POLLING_INTERVAL);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [enabled, fetchMessages, selectedMatchId]);
 
   const selectedMatch = useMemo(
     () => matches.find((match) => match.match_id === selectedMatchId) || null,
@@ -156,9 +193,10 @@ export default function MatchChatsPage() {
       }
       setNewMessage("");
       fetchMessages(selectedMatchId);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error al enviar mensaje:", err);
-      toast.error("No se pudo enviar el mensaje", { description: err.message });
+      const message = err instanceof Error ? err.message : "Error al enviar el mensaje.";
+      toast.error("No se pudo enviar el mensaje", { description: message });
     } finally {
       setSendingMessage(false);
     }
